@@ -70,15 +70,20 @@ class PDFTableObject: PDFRenderObject {
                 // Fetch style of cell based on type
                 let style = getStyle(tableStyle: table.style, type: type)
                 // Calculate cell frame
-                let cell = calculate(generator: generator,
+                var cell = calculate(generator: generator,
                                      container: container,
                                      cell: node.cell,
                                      style: style,
                                      type: type,
                                      origin: origin,
                                      width: width)
+                
+                if let fixedHeight = fixedHeight(for: node) {
+                    cell.frames.cell.size.height = fixedHeight
+                }
+                
                 calculatedCells.append(cell)
-
+                
                 // Increase bottom offset for columns
                 let bottomIndex = node.position.row + node.moreRowsSpan + 1
                 verticalOrigins[bottomIndex] = max(verticalOrigins[bottomIndex], cell.frames.cell.maxY)
@@ -93,9 +98,13 @@ class PDFTableObject: PDFRenderObject {
                 var frame = cells[rowIdx][colIdx]
                 // Align bottom border with other columns
                 let bottomIndex = node.position.row + node.moreRowsSpan + 1
-                let diffY = verticalOrigins[bottomIndex] - frame.frames.cell.maxY
-                frame.frames.cell.size.height += diffY
-
+                if let fixedHeight = fixedHeight(for: node) {
+                    frame.frames.cell.size.height = fixedHeight
+                } else {
+                    let diffY = verticalOrigins[bottomIndex] - frame.frames.cell.maxY
+                    frame.frames.cell.size.height += diffY
+                }
+                
                 // Reposition cell content
                 cells[rowIdx][colIdx] = reposition(cell: frame)
             }
@@ -137,7 +146,23 @@ class PDFTableObject: PDFRenderObject {
 
         return renderObjects.objects
     }
-
+    
+    func fixedHeight(for node: PDFTableNode) -> CGFloat? {
+        let firstRow = node.position.row
+        let lastRow = firstRow + node.moreRowsSpan
+        var total: CGFloat = 0
+        for row in firstRow...lastRow {
+            guard let height = table.fixedRowHeights[row] else {
+                return nil
+            }
+            total += height
+        }
+        if node.moreRowsSpan > 0 {
+            total += CGFloat(node.moreRowsSpan) * table.margin
+        }
+        return total
+    }
+    
     func calculate(generator: PDFGenerator,
                    container: PDFContainer,
                    cell: PDFTableCell,
