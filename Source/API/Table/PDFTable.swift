@@ -34,6 +34,14 @@ public class PDFTable: PDFDocumentObject {
     /// Padding is the distance between the cell content and its borders.
     public var padding: CGFloat = 0
 
+    /// Distance between the table outline and the first and last column.
+    /// Applied on the left and the right only.
+    public var horizontalInset: CGFloat = 0
+
+    /// Distance between the table outline and the first and last row.
+    /// Applied above the first row and below the last row only.
+    public var verticalInset: CGFloat = 0
+
     /// Margin is the distance between the cell borders and other cells
     public var margin: CGFloat = 0
 
@@ -97,6 +105,8 @@ public class PDFTable: PDFDocumentObject {
         table.cells = cells
         table.widths = widths
         table.padding = padding
+        table.horizontalInset = horizontalInset
+        table.verticalInset = verticalInset
         table.margin = margin
         table.showHeadersOnEveryPage = showHeadersOnEveryPage
         table.fixedRowHeights = fixedRowHeights
@@ -155,6 +165,12 @@ public class PDFTable: PDFDocumentObject {
             return false
         }
         guard padding == otherTable.padding else {
+            return false
+        }
+        guard horizontalInset == otherTable.horizontalInset else {
+            return false
+        }
+        guard verticalInset == otherTable.verticalInset else {
             return false
         }
         guard margin == otherTable.margin else {

@@ -47,8 +47,10 @@ class PDFTableObject: PDFRenderObject {
         // Merge table cells
         let mergeNodes = PDFTableMergeUtil.calculateMerged(table: table)
 
+        // The first row starts below the top border by `verticalInset`.
+        let firstRowY = tableOrigin.y + table.verticalInset
         // Current vertical position per column
-        var verticalOrigins = [tableOrigin.y] + table.cells.indices.map { _ in tableOrigin.y }
+        var verticalOrigins = [firstRowY] + table.cells.indices.map { _ in firstRowY }
 
         // Calculated cells with their frames
         var cells: [[PDFTableCalculatedCell]] = []
@@ -56,14 +58,16 @@ class PDFTableObject: PDFRenderObject {
         for (rowIdx, row) in mergeNodes.enumerated() {
             var calculatedCells: [PDFTableCalculatedCell] = []
             for node in row {
+                // Columns sit inside the outline by `horizontalInset` on the left and the right.
+                let columnAreaWidth = max(availableSize.width - 2 * table.horizontalInset, 0)
                 // All previous column widths reduced to single coordinate
-                let originX = table.widths[..<node.position.column].reduce(0, +) * availableSize.width
+                let originX = table.horizontalInset + table.widths[..<node.position.column].reduce(0, +) * columnAreaWidth
                 // Calculate origin of cell offsetted by table origin
                 let origin = CGPoint(x: tableOrigin.x + originX, y: verticalOrigins[node.position.row])
                 // Column indicies of merged cells, as it might span multiple columns
                 let columns = node.position.column...(node.position.column + node.moreColumnsSpan)
                 // Width of merged cells
-                let width = table.widths[columns].reduce(0, +) * availableSize.width
+                let width = table.widths[columns].reduce(0, +) * columnAreaWidth
 
                 // Fetch type of cell
                 let type = getCellType(of: node, in: table, at: rowIdx)
@@ -183,7 +187,10 @@ class PDFTableObject: PDFRenderObject {
                     )
                 ),
                 content: CGRect(
-                    origin: origin + table.margin + table.padding,
+                    origin: CGPoint(
+                        x: origin.x + table.margin + table.padding,
+                        y: origin.y + table.margin + table.padding
+                    ),
                     size: CGSize(
                         width: width - 2 * (table.margin + table.padding),
                         height: 0
@@ -428,12 +435,15 @@ class PDFTableObject: PDFRenderObject {
                 result += try sliceObject.calculate(generator: generator, container: container)
             }
 
+            // The extra vertical inset belongs to the table's first and last row, not to a page break.
+            let topInset = firstPage ? table.verticalInset : 0
+            let bottomInset = nextPageCells.isEmpty ? table.verticalInset : 0
             // Draw the table outline for the page
             let tableOutlineObject = PDFRectangleObject(lineStyle: table.style.outline, frame: CGRect(
-                x: pageStart.x - table.margin,
-                y: pageStart.y - table.margin,
-                width: pageEnd.x - pageStart.x + table.margin*2,
-                height: pageEnd.y - pageStart.y + table.margin*2
+                x: pageStart.x - table.margin - table.horizontalInset,
+                y: pageStart.y - table.margin - topInset,
+                width: pageEnd.x - pageStart.x + table.margin * 2 + table.horizontalInset * 2,
+                height: pageEnd.y - pageStart.y + table.margin * 2 + topInset + bottomInset
             ))
             result += [(container, tableOutlineObject)]
 
@@ -443,7 +453,7 @@ class PDFTableObject: PDFRenderObject {
             }
         } while !nextPageCells.isEmpty
 
-        return (objects: result, offset: pageEnd.y + table.margin)
+        return (objects: result, offset: pageEnd.y + table.margin + table.verticalInset)
     }
 
     /// Holds two lists of cells, used during table calculations
