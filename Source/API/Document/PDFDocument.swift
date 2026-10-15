@@ -206,6 +206,7 @@ public class PDFDocument: CustomStringConvertible {
      * - Parameter color: Table to add to document
      */
     public func add(_ container: PDFContainer = PDFContainer.contentLeft, table: PDFTable) {
+        PDFTableTitleAdoption.adopt(into: table, objects: &objects, container: container)
         objects += [(container, PDFTableObject(table: table))]
     }
 

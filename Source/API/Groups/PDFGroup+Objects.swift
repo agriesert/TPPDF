@@ -155,6 +155,7 @@ public extension PDFGroup {
      * - Parameter table: An instance of ``PDFTable``
      */
     func add(_ container: PDFGroupContainer = PDFGroupContainer.left, table: PDFTable) {
+        PDFTableTitleAdoption.adopt(into: table, objects: &objects, container: container)
         objects += [(container, PDFTableObject(table: table))]
     }
 

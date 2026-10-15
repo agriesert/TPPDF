@@ -187,6 +187,7 @@ public class PDFSectionColumn: PDFDocumentObject {
      * - Parameter color: Table to add to document
      */
     public func add(_ container: PDFSectionColumnContainer = PDFSectionColumnContainer.left, table: PDFTable) {
+        PDFTableTitleAdoption.adopt(into: table, objects: &objects, container: container)
         objects += [(container, PDFTableObject(table: table))]
     }
 

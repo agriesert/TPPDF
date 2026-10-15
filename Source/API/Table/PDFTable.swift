@@ -59,6 +59,44 @@ public class PDFTable: PDFDocumentObject {
     public var shouldSplitCellsOnPageBreak = false
 
     /**
+     * Body rows that must fit below the title and column header before the table may start.
+     *
+     * Zero keeps the historical behavior. A positive value moves the whole table to the next
+     * page when the current page cannot hold that many full body rows after the header block.
+     */
+    public var minimumBodyRowsOnFirstPage: Int = 0
+
+    /**
+     * Leading rows that describe the table, above the column headers.
+     *
+     * Those rows are repeated on continuation pages. ``PDFTable/continuationSuffix`` is appended
+     * to their text there. Column-header rows are left unchanged.
+     */
+    public var titleRowCount: Int = 0
+
+    /**
+     * Text appended once to a continued table title, including any separating space.
+     *
+     * Empty means continuation pages keep the original title. The suffix is not appended again
+     * when the title already ends with it.
+     */
+    public var continuationSuffix: String = ""
+
+    /**
+     * When true, a short simple-text object placed directly above this table is treated as its title.
+     *
+     * The text, and at most one small space between it and the table, is removed from the container
+     * and drawn again by the table so a page break can keep the title with the first row.
+     */
+    public var adoptsPrecedingTitle: Bool = false
+
+    /// Simple text adopted from the object directly above the table. Nil when the table has its own title row.
+    public var leadingTitle: PDFSimpleText?
+
+    /// Space that was between ``PDFTable/leadingTitle`` and the table. Drawn between the title and the outline.
+    public var leadingTitleGap: CGFloat = 0
+
+    /**
      * Optional fixed heights for individual table rows.
      *
      * The dictionary key is the zero-based row index and the value is the height
@@ -118,6 +156,12 @@ public class PDFTable: PDFDocumentObject {
         table.continuousRowFills = continuousRowFills
         table.showHeadersOnEveryPage = showHeadersOnEveryPage
         table.fixedRowHeights = fixedRowHeights
+        table.minimumBodyRowsOnFirstPage = minimumBodyRowsOnFirstPage
+        table.titleRowCount = titleRowCount
+        table.continuationSuffix = continuationSuffix
+        table.adoptsPrecedingTitle = adoptsPrecedingTitle
+        table.leadingTitle = leadingTitle.map { PDFSimpleText(text: $0.text, spacing: $0.spacing, style: $0.style) }
+        table.leadingTitleGap = leadingTitleGap
         return table
     }
 
@@ -191,6 +235,30 @@ public class PDFTable: PDFDocumentObject {
             return false
         }
         guard fixedRowHeights == otherTable.fixedRowHeights else {
+            return false
+        }
+        guard minimumBodyRowsOnFirstPage == otherTable.minimumBodyRowsOnFirstPage else {
+            return false
+        }
+        guard titleRowCount == otherTable.titleRowCount else {
+            return false
+        }
+        guard continuationSuffix == otherTable.continuationSuffix else {
+            return false
+        }
+        guard adoptsPrecedingTitle == otherTable.adoptsPrecedingTitle else {
+            return false
+        }
+        guard leadingTitleGap == otherTable.leadingTitleGap else {
+            return false
+        }
+        guard leadingTitle?.text == otherTable.leadingTitle?.text else {
+            return false
+        }
+        guard leadingTitle?.spacing == otherTable.leadingTitle?.spacing else {
+            return false
+        }
+        guard leadingTitle?.style == otherTable.leadingTitle?.style else {
             return false
         }
         return true

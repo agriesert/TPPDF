@@ -114,26 +114,54 @@ class PDFTableObject: PDFRenderObject {
             }
         }
 
-        // If column headers should be on every page, we prepare them for repeated use
+        // A heading adopted from the objects above the table is not a row yet.
+        // Reserve its height, using the taller continued string, before pagination.
+        let titleMetrics = measureLeadingTitle(generator: generator, container: container)
+        if titleMetrics.block > 0 {
+            cells = shiftRows(cells, by: titleMetrics.block)
+        }
+        expandTitleRowsForContinuationSuffix(&cells)
+
+        // Move the whole table when the title, the header and one body row do not fit.
+        // The check runs after the cells have a real page position and before they are sliced.
+        let openingBreak = try moveTableWhenFirstBodyRowDoesNotFit(
+            generator: generator,
+            container: container,
+            cells: &cells,
+            titleBlock: titleMetrics.block
+        )
+
+        // Column headers, and a styled title row inside the column-header count, are repeated
+        // only when the caller asked for it. A title row is still repeated on its own so the
+        // continuation suffix has somewhere to go when column headers stay on the first page.
         var headerHeight: CGFloat = 0
         var headerCells: [PDFTableCalculatedCell] = []
-        if table.showHeadersOnEveryPage {
+        if table.showHeadersOnEveryPage || table.titleRowCount > 0 {
             var rowIdx = 0
-            while rowIdx < table.size.rows && cells[rowIdx].allSatisfy({ $0.type == .rowHeader || $0.type == .header }) {
-                headerCells += cells[rowIdx]
-                rowIdx += 1
+            while rowIdx < cells.count {
+                let isTitle = rowIdx < table.titleRowCount
+                let withinHeaderCount = rowIdx < table.style.columnHeaderCount
+                let typedHeader = cells[rowIdx].allSatisfy { $0.type == .rowHeader || $0.type == .header }
+                let repeatsHeader = table.showHeadersOnEveryPage && (withinHeaderCount || typedHeader)
+                if isTitle || repeatsHeader {
+                    headerCells += cells[rowIdx].map { repeatedHeaderCell($0, row: rowIdx) }
+                    rowIdx += 1
+                } else {
+                    break
+                }
             }
 
             // Safety check to make sure we don't reference rows we don't have.
             // This handles the case where we have a header row, but no data rows.
-            if rowIdx >= table.size.rows {
-                rowIdx = table.size.rows - 1
-            }
-
-            headerHeight = cells[rowIdx].reduce(0) { prev, calcCell in
-                max(prev, calcCell.frames.cell.minY)
-            } - headerCells.reduce(CGFloat.greatestFiniteMagnitude) { prev, calcCell in
-                min(prev, calcCell.frames.cell.minY)
+            if !headerCells.isEmpty {
+                if rowIdx >= cells.count {
+                    rowIdx = cells.count - 1
+                }
+                headerHeight = cells[rowIdx].reduce(0) { prev, calcCell in
+                    max(prev, calcCell.frames.cell.minY)
+                } - headerCells.reduce(CGFloat.greatestFiniteMagnitude) { prev, calcCell in
+                    min(prev, calcCell.frames.cell.minY)
+                }
             }
         }
 
@@ -142,13 +170,16 @@ class PDFTableObject: PDFRenderObject {
                                                     container: container,
                                                     cells: cells.reduce([], +),
                                                     headerCells: headerCells,
-                                                    headerHeight: headerHeight)
+                                                    headerHeight: headerHeight,
+                                                    titleBlock: titleMetrics.block,
+                                                    titleTextHeight: titleMetrics.text,
+                                                    continuedTitleTextHeight: titleMetrics.continued)
 
         // Set correct offset of generator
         let finalOffset = PDFCalculations.calculateContentOffset(for: generator, of: renderObjects.offset, in: container)
         try PDFOffsetObject(offset: finalOffset).calculate(generator: generator, container: container)
 
-        return renderObjects.objects
+        return openingBreak + renderObjects.objects
     }
     
     func fixedHeight(for node: PDFTableNode) -> CGFloat? {
@@ -310,7 +341,10 @@ class PDFTableObject: PDFRenderObject {
         container: PDFContainer,
         cells: [PDFTableCalculatedCell],
         headerCells: [PDFTableCalculatedCell]?,
-        headerHeight: CGFloat
+        headerHeight: CGFloat,
+        titleBlock: CGFloat = 0,
+        titleTextHeight: CGFloat = 0,
+        continuedTitleTextHeight: CGFloat = 0
     ) throws -> (objects: [PDFLocatedRenderObject], offset: CGFloat) {
         var result: [PDFLocatedRenderObject] = []
 
@@ -318,7 +352,13 @@ class PDFTableObject: PDFRenderObject {
         let startPosition: CGPoint = cells.first?.frames.cell.origin ?? .zero
         var nextPageCells: [PDFTableCalculatedCell] = cells
         var pageEnd = CGPoint.null
-        var headerShift = table.showHeadersOnEveryPage
+        let repeatsHeaderBlock = !(headerCells?.isEmpty ?? true)
+        var continuationInset: CGFloat = repeatsHeaderBlock ? headerHeight : 0
+        if table.leadingTitle != nil {
+            continuationInset += titleBlock
+        }
+        // The inset is applied once. Later pages already stored their cells relative to it.
+        var applyContinuationInset = continuationInset != 0
 
         repeat {
             var pageStart = CGPoint.null
@@ -329,7 +369,28 @@ class PDFTableObject: PDFRenderObject {
             // Calculate bottom page maximum limit
             let maxOffset = PDFCalculations.calculateBottomMaximum(for: generator)
 
-            if !firstPage, let headerCells = headerCells {
+            if firstPage, table.leadingTitle != nil, let first = nextPageCells.first {
+                let visualTop = first.frames.cell.minY - table.verticalInset - table.margin - titleBlock
+                result += leadingTitleObjects(
+                    generator: generator,
+                    container: container,
+                    continued: false,
+                    y: visualTop,
+                    height: titleTextHeight
+                )
+            }
+            if !firstPage, table.leadingTitle != nil {
+                result += leadingTitleObjects(
+                    generator: generator,
+                    container: container,
+                    continued: true,
+                    y: minOffset,
+                    height: continuedTitleTextHeight
+                )
+                minOffset += titleBlock
+            }
+
+            if !firstPage, let headerCells = headerCells, !headerCells.isEmpty {
                 for item in headerCells {
                     var cellFrame = item.frames.cell
                     var contentFrame = item.frames.content
@@ -377,10 +438,11 @@ class PDFTableObject: PDFRenderObject {
                 minOffset += headerHeight
             }
             if !firstPage {
-                // shift the rest of the cells down by headerHeight
-                if headerShift {
-                    nextPageCells = shiftCellsBy(cells: nextPageCells, shiftValue: headerHeight)
-                    headerShift = false
+                // The first continuation page has to clear the repeated title and column headers.
+                // Further pages already start at that offset, so the inset is applied only once.
+                if applyContinuationInset {
+                    nextPageCells = shiftCellsBy(cells: nextPageCells, shiftValue: continuationInset)
+                    applyContinuationInset = false
                 }
                 // add table padding around cells
                 nextPageCells = shiftCellsBy(cells: nextPageCells, shiftValue: table.margin)
@@ -717,6 +779,195 @@ class PDFTableObject: PDFRenderObject {
     /// Creates a new `PDFTableObject` with the same properties
     override var copy: PDFRenderObject {
         PDFTableObject(table: table.copy)
+    }
+
+    private struct LeadingTitleMetrics {
+        var text: CGFloat = 0
+        var continued: CGFloat = 0
+        var block: CGFloat = 0
+    }
+
+    /// Height of an adopted heading. The block reserves the taller of the two strings plus the original gap.
+    private func measureLeadingTitle(generator: PDFGenerator, container: PDFContainer) -> LeadingTitleMetrics {
+        guard let title = table.leadingTitle, !title.text.isEmpty else {
+            return LeadingTitleMetrics()
+        }
+        let width = PDFCalculations.calculateAvailableFrameWidth(for: generator, in: container)
+        let attributes = titleAttributes(generator: generator, container: container, spacing: title.spacing, style: title.style)
+        let text = measuredTextHeight(title.text, width: width, attributes: attributes)
+        let continuedText = continuedTitle(title.text)
+        let continued = measuredTextHeight(continuedText, width: width, attributes: attributes)
+        return LeadingTitleMetrics(
+            text: text,
+            continued: continued,
+            block: max(text, continued) + table.leadingTitleGap
+        )
+    }
+
+    /// Gives a title row enough height for the continuation suffix so the repeated row cannot overlap the body.
+    private func expandTitleRowsForContinuationSuffix(_ cells: inout [[PDFTableCalculatedCell]]) {
+        guard table.titleRowCount > 0, !table.continuationSuffix.isEmpty else { return }
+        let rowLimit = min(table.titleRowCount, cells.count)
+        for row in 0..<rowLimit {
+            var extra: CGFloat = 0
+            for cell in cells[row] {
+                guard let text = cell.cell.content?.stringValue else { continue }
+                let continued = continuedTitle(text)
+                guard continued != text else { continue }
+                // The measured content frame is only as wide as the original string.
+                // The continuation has to use the full cell, or the suffix wraps onto itself.
+                let width = max(cell.frames.cell.width - 2 * table.padding, cell.frames.content.width)
+                guard width > 1 else { continue }
+                let continuedHeight = measuredTextHeight(
+                    continued,
+                    width: width,
+                    attributes: cellTextAttributes(text: continued, style: cell.style, alignment: cell.cell.alignment)
+                )
+                let needed = continuedHeight + 2 * table.padding
+                extra = max(extra, needed - cell.frames.cell.height)
+            }
+            guard extra > 0.5 else { continue }
+            for index in cells[row].indices {
+                cells[row][index].frames.cell.size.height += extra
+                cells[row][index].frames.content.size.height += extra
+                cells[row][index] = reposition(cell: cells[row][index])
+            }
+            for later in (row + 1)..<cells.count {
+                cells[later] = shiftCellsBy(cells: cells[later], shiftValue: extra)
+            }
+        }
+    }
+
+    /// Starts the table on the next page when the header block plus the required body rows do not fit.
+    ///
+    /// A table that is already at the top of the page stays there. Moving it again would loop,
+    /// and a single row that is taller than the page is reported by the existing cell filter.
+    private func moveTableWhenFirstBodyRowDoesNotFit(
+        generator: PDFGenerator,
+        container: PDFContainer,
+        cells: inout [[PDFTableCalculatedCell]],
+        titleBlock: CGFloat
+    ) throws -> [PDFLocatedRenderObject] {
+        guard table.minimumBodyRowsOnFirstPage > 0 else { return [] }
+        let neededIndex = table.style.columnHeaderCount + table.minimumBodyRowsOnFirstPage - 1
+        guard neededIndex >= 0, neededIndex < cells.count, let anchor = cells.first?.first else { return [] }
+        guard let bottom = cells[neededIndex].map(\.frames.cell.maxY).max() else { return [] }
+
+        let visualTop = anchor.frames.cell.minY - table.verticalInset - table.margin - titleBlock
+        let top = PDFCalculations.calculateTopMinimum(for: generator)
+        let maxOffset = PDFCalculations.calculateBottomMaximum(for: generator)
+        // `filterCellsOnPage` keeps a cell only while `maxY < maxOffset`, so an exact fit does not count.
+        guard visualTop > top + 0.5, bottom >= maxOffset else { return [] }
+
+        let pageBreak = try PDFPageBreakObject().calculate(generator: generator, container: container)
+        let newTop = PDFCalculations.calculateTopMinimum(for: generator) + generator.layout.heights.content
+        cells = shiftRows(cells, by: newTop - visualTop)
+        return pageBreak
+    }
+
+    private func shiftRows(_ cells: [[PDFTableCalculatedCell]], by delta: CGFloat) -> [[PDFTableCalculatedCell]] {
+        guard delta != 0 else { return cells }
+        return cells.map { shiftCellsBy(cells: $0, shiftValue: delta) }
+    }
+
+    /// Continuation pages use a copied cell. The first page keeps the original model cell and its text.
+    private func repeatedHeaderCell(_ calculated: PDFTableCalculatedCell, row: Int) -> PDFTableCalculatedCell {
+        guard row < table.titleRowCount else { return calculated }
+        guard let text = calculated.cell.content?.stringValue else { return calculated }
+        let continued = continuedTitle(text)
+        guard continued != text else { return calculated }
+        var copy = calculated
+        copy.cell = PDFTableCell(
+            content: PDFTableContent(type: .string, content: continued),
+            alignment: calculated.cell.alignment,
+            style: calculated.cell.style
+        )
+        let innerWidth = max(calculated.frames.cell.width - 2 * table.padding, calculated.frames.content.width)
+        copy.frames.content.size.width = innerWidth
+        if calculated.cell.alignment.isLeft {
+            copy.frames.content.origin.x = calculated.frames.cell.minX + table.padding
+        }
+        return copy
+    }
+
+    private func continuedTitle(_ text: String) -> String {
+        let suffix = table.continuationSuffix
+        guard !suffix.isEmpty, !text.hasSuffix(suffix) else { return text }
+        return text + suffix
+    }
+
+    /// Builds a text object that is already calculated. Calling `calculate()` would move the layout cursor.
+    private func leadingTitleObjects(
+        generator: PDFGenerator,
+        container: PDFContainer,
+        continued: Bool,
+        y: CGFloat,
+        height: CGFloat
+    ) -> [PDFLocatedRenderObject] {
+        guard let title = table.leadingTitle, height > 0 else { return [] }
+        let text = continued ? continuedTitle(title.text) : title.text
+        let width = PDFCalculations.calculateAvailableFrameWidth(for: generator, in: container)
+        guard width > 1 else { return [] }
+        let origin = PDFCalculations.calculateElementPosition(
+            for: generator,
+            in: container,
+            with: CGSize(width: width, height: height)
+        )
+        let attributes = titleAttributes(generator: generator, container: container, spacing: title.spacing, style: title.style)
+        let attributed = NSAttributedString(string: text, attributes: attributes)
+        let textObject = PDFAttributedTextObject(attributedText: PDFAttributedText(text: attributed))
+        textObject.attributedString = attributed
+        textObject.frame = CGRect(x: origin.x, y: y, width: width, height: max(height, 1))
+        return [(container, textObject)]
+    }
+
+    private func titleAttributes(
+        generator: PDFGenerator,
+        container: PDFContainer,
+        spacing: CGFloat,
+        style: PDFTextStyle?
+    ) -> [NSAttributedString.Key: NSObject] {
+        PDFAttributedTextObject.generateDefaultTextAttributes(
+            container: container,
+            fonts: &generator.fonts,
+            textColor: &generator.textColor,
+            spacing: spacing,
+            style: style
+        )
+    }
+
+    private func cellTextAttributes(
+        text _: String,
+        style: PDFTableCellStyle,
+        alignment: PDFTableCellAlignment
+    ) -> [NSAttributedString.Key: NSObject] {
+        let paragraph = NSMutableParagraphStyle()
+        if alignment.isLeft {
+            paragraph.alignment = .left
+        } else if alignment.isRight {
+            paragraph.alignment = .right
+        } else {
+            paragraph.alignment = .center
+        }
+        return [
+            .foregroundColor: style.colors.text,
+            .font: style.font,
+            .paragraphStyle: paragraph,
+        ]
+    }
+
+    private func measuredTextHeight(
+        _ text: String,
+        width: CGFloat,
+        attributes: [NSAttributedString.Key: NSObject]
+    ) -> CGFloat {
+        guard width > 1, !text.isEmpty else { return 0 }
+        let attributed = NSAttributedString(string: text, attributes: attributes)
+        let size = PDFCalculations.calculateTextSizeAndRemainder(
+            of: attributed,
+            in: CGSize(width: width, height: 10_000)
+        ).size
+        return ceil(size.height)
     }
 }
 
