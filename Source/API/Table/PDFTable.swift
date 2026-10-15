@@ -45,6 +45,13 @@ public class PDFTable: PDFDocumentObject {
     /// Margin is the distance between the cell borders and other cells
     public var margin: CGFloat = 0
 
+    /// Stretch a non-clear row fill across the gutters and the side inset.
+    ///
+    /// Cell fills stop at each cell frame, so margin and the side inset leave
+    /// the page color showing between columns. One band behind the row closes that gap.
+    /// Header rows stay untouched because their fill is clear.
+    public var continuousRowFills: Bool = false
+
     /// Header rows will be drawn on every page
     public var showHeadersOnEveryPage: Bool = false
 
@@ -108,6 +115,7 @@ public class PDFTable: PDFDocumentObject {
         table.horizontalInset = horizontalInset
         table.verticalInset = verticalInset
         table.margin = margin
+        table.continuousRowFills = continuousRowFills
         table.showHeadersOnEveryPage = showHeadersOnEveryPage
         table.fixedRowHeights = fixedRowHeights
         return table
@@ -174,6 +182,9 @@ public class PDFTable: PDFDocumentObject {
             return false
         }
         guard margin == otherTable.margin else {
+            return false
+        }
+        guard continuousRowFills == otherTable.continuousRowFills else {
             return false
         }
         guard showHeadersOnEveryPage == otherTable.showHeadersOnEveryPage else {

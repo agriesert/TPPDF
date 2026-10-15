@@ -399,6 +399,18 @@ class PDFTableObject: PDFRenderObject {
                 throw PDFError.tableCellTooBig(cell: firstInvalidCell.cell)
             }
 
+            if table.continuousRowFills {
+                for band in continuousRowBands(from: onPageCells) {
+                    let sliceObject = createSliceObject(
+                        frame: band.frame,
+                        elements: [band],
+                        minOffset: minOffset,
+                        maxOffset: maxOffset
+                    )
+                    result += try sliceObject.calculate(generator: generator, container: container)
+                }
+            }
+
             for item in onPageCells {
                 let cellFrame = item.frames.cell
 
@@ -542,6 +554,51 @@ class PDFTableObject: PDFRenderObject {
             sliceObject.frame.size.height -= minOffset - sliceObject.frame.origin.y
         }
         return sliceObject
+    }
+
+    /// One rectangle per body row whose cells share a non-clear fill.
+    /// The rectangle covers the margin gutters and the side inset. Clear header rows are skipped.
+    func continuousRowBands(from cells: [PDFTableCalculatedCell]) -> [PDFRectangleObject] {
+        var rows: [[PDFTableCalculatedCell]] = []
+        for cell in cells {
+            if let index = rows.firstIndex(where: { abs($0[0].frames.cell.minY - cell.frames.cell.minY) < 0.5 }) {
+                rows[index].append(cell)
+            } else {
+                rows.append([cell])
+            }
+        }
+
+        var bands: [PDFRectangleObject] = []
+        for row in rows {
+            let components = row.map { fillComponents($0.style.colors.fill) }
+            guard let key = components.first ?? nil, components.allSatisfy({ $0 == key }) else { continue }
+            guard let fill = row.first?.style.colors.fill else { continue }
+            let minX = row.map(\.frames.cell.minX).min() ?? 0
+            let maxX = row.map(\.frames.cell.maxX).max() ?? 0
+            let minY = row.map(\.frames.cell.minY).min() ?? 0
+            let maxY = row.map(\.frames.cell.maxY).max() ?? 0
+            // A fraction of a point of overlap hides the seam where two fills meet.
+            let overlap: CGFloat = 0.3
+            let frame = CGRect(
+                x: minX - table.margin - table.horizontalInset,
+                y: minY - table.margin,
+                width: maxX - minX + 2 * table.margin + 2 * table.horizontalInset,
+                height: maxY - minY + 2 * table.margin + overlap
+            )
+            bands.append(PDFRectangleObject(lineStyle: .none, frame: frame, fillColor: fill))
+        }
+        return bands
+    }
+
+    private func fillComponents(_ color: Color) -> [CGFloat]? {
+        guard let converted = color.cgColor.converted(
+            to: CGColorSpaceCreateDeviceRGB(),
+            intent: .defaultIntent,
+            options: nil
+        ), let components = converted.components, converted.alpha > 0.01 else {
+            return nil
+        }
+        return components
     }
 
     /// Creates a render object for the cell background
