@@ -38,6 +38,9 @@ class PDFTableObject: PDFRenderObject {
     override func calculate(generator: PDFGenerator, container: PDFContainer) throws -> [PDFLocatedRenderObject] {
         try PDFTableValidator.validateTable(table: table)
 
+        // A section heading reserved here moves with the table when the first body row does not fit.
+        let headingPrefix = try generator.prepareRepeatingHeadingForTable(in: container)
+
         // Calculate available size on current page
         let availableSize = PDFCalculations.calculateAvailableFrame(for: generator, in: container)
 
@@ -165,6 +168,13 @@ class PDFTableObject: PDFRenderObject {
             }
         }
 
+        // Draw a reserved heading only when the table stayed on this page.
+        // A table that moved already received the heading from its opening page break.
+        let headingDraw = try generator.finishRepeatingHeadingAfterTable(
+            stayedOnPage: openingBreak.isEmpty,
+            container: container
+        )
+
         // Create render objects
         let renderObjects = try createRenderObjects(generator: generator,
                                                     container: container,
@@ -179,7 +189,7 @@ class PDFTableObject: PDFRenderObject {
         let finalOffset = PDFCalculations.calculateContentOffset(for: generator, of: renderObjects.offset, in: container)
         try PDFOffsetObject(offset: finalOffset).calculate(generator: generator, container: container)
 
-        return openingBreak + renderObjects.objects
+        return headingPrefix + headingDraw + openingBreak + renderObjects.objects
     }
     
     func fixedHeight(for node: PDFTableNode) -> CGFloat? {
@@ -359,6 +369,9 @@ class PDFTableObject: PDFRenderObject {
         }
         // The inset is applied once. Later pages already stored their cells relative to it.
         var applyContinuationInset = continuationInset != 0
+        // Space taken by a section heading that the previous page break drew at the top.
+        var headingInsetForNextPage: CGFloat = 0
+        var applyHeadingInset = true
 
         repeat {
             var pageStart = CGPoint.null
@@ -366,6 +379,9 @@ class PDFTableObject: PDFRenderObject {
 
             // Calculate top page inset
             var minOffset = PDFCalculations.calculateTopMinimum(for: generator)
+            if !firstPage {
+                minOffset += headingInsetForNextPage
+            }
             // Calculate bottom page maximum limit
             let maxOffset = PDFCalculations.calculateBottomMaximum(for: generator)
 
@@ -438,11 +454,19 @@ class PDFTableObject: PDFRenderObject {
                 minOffset += headerHeight
             }
             if !firstPage {
-                // The first continuation page has to clear the repeated title and column headers.
-                // Further pages already start at that offset, so the inset is applied only once.
+                // The first continuation page has to clear the repeated section heading,
+                // title and column headers. Further pages already start at that offset.
+                var shift: CGFloat = 0
                 if applyContinuationInset {
-                    nextPageCells = shiftCellsBy(cells: nextPageCells, shiftValue: continuationInset)
+                    shift += continuationInset
                     applyContinuationInset = false
+                }
+                if applyHeadingInset, headingInsetForNextPage > 0 {
+                    shift += headingInsetForNextPage
+                    applyHeadingInset = false
+                }
+                if shift != 0 {
+                    nextPageCells = shiftCellsBy(cells: nextPageCells, shiftValue: shift)
                 }
                 // add table padding around cells
                 nextPageCells = shiftCellsBy(cells: nextPageCells, shiftValue: table.margin)
@@ -522,7 +546,13 @@ class PDFTableObject: PDFRenderObject {
             result += [(container, tableOutlineObject)]
 
             if !nextPageCells.isEmpty {
+                let placementsBefore = generator.repeatingHeadingPlacements
                 result += try PDFPageBreakObject().calculate(generator: generator, container: container)
+                if generator.repeatingHeadingPlacements != placementsBefore {
+                    headingInsetForNextPage = generator.repeatingSectionHeading?.blockHeight ?? 0
+                } else {
+                    headingInsetForNextPage = 0
+                }
                 firstPage = false
             }
         } while !nextPageCells.isEmpty
@@ -856,13 +886,32 @@ class PDFTableObject: PDFRenderObject {
         let visualTop = anchor.frames.cell.minY - table.verticalInset - table.margin - titleBlock
         let top = PDFCalculations.calculateTopMinimum(for: generator)
         let maxOffset = PDFCalculations.calculateBottomMaximum(for: generator)
+        // A section heading directly above this table counts as the top of the page.
+        // Moving again would leave that heading behind or loop.
+        let ceiling = repeatingHeadingCeiling(for: generator, pageTop: top)
         // `filterCellsOnPage` keeps a cell only while `maxY < maxOffset`, so an exact fit does not count.
-        guard visualTop > top + 0.5, bottom >= maxOffset else { return [] }
+        guard visualTop > ceiling + 0.5, bottom >= maxOffset else { return [] }
 
         let pageBreak = try PDFPageBreakObject().calculate(generator: generator, container: container)
         let newTop = PDFCalculations.calculateTopMinimum(for: generator) + generator.layout.heights.content
         cells = shiftRows(cells, by: newTop - visualTop)
         return pageBreak
+    }
+
+    /// Top edge the table may already occupy when a repeating section heading sits above it.
+    private func repeatingHeadingCeiling(for generator: PDFGenerator, pageTop: CGFloat) -> CGFloat {
+        guard let heading = generator.repeatingSectionHeading, heading.blockHeight > 0 else {
+            return pageTop
+        }
+        if generator.pendingRepeatingHeadingAnchor != nil {
+            return pageTop + heading.blockHeight
+        }
+        // The heading was just placed and nothing else has been added on this page yet.
+        if heading.drawnOnCurrentPage,
+           abs(generator.layout.heights.content - heading.blockHeight) < 0.5 {
+            return pageTop + heading.blockHeight
+        }
+        return pageTop
     }
 
     private func shiftRows(_ cells: [[PDFTableCalculatedCell]], by delta: CGFloat) -> [[PDFTableCalculatedCell]] {

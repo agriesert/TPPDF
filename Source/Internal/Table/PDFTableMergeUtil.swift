@@ -33,8 +33,9 @@ enum PDFTableMergeUtil {
                     found[rowIdx][adjacentColumnIdx] = true
                     node.moreColumnsSpan += 1
                 }
-                // Check rows underneath and right of cell
-                for adjacentRowIdx in (rowIdx + 1)..<table.size.rows {
+                // Rows appended after `size` is fixed still belong to the table.
+                // A range that starts past `size.rows` traps, so the scan follows `cells`.
+                for adjacentRowIdx in (rowIdx + 1)..<table.cells.count {
                     // Cell underneath current cell in next row
                     let startColIdx = colIdx
                     let endColIdx = colIdx + node.moreColumnsSpan

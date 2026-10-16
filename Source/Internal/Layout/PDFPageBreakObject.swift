@@ -53,7 +53,15 @@ class PDFPageBreakObject: PDFRenderObject {
             generator.columnState.set(inset: (left: inset.left + spacing.left, right: inset.right + spacing.right), for: container)
         }
 
-        return [(container, self)]
+        var result: [PDFLocatedRenderObject] = [(container, self)]
+        // A real page break repeats the active section heading and reserves its height.
+        // Column wraps stay on the same page and keep the heading where it already is.
+        if !stayOnSamePage,
+           !generator.isRenderingRepeatingHeading,
+           let heading = generator.repeatingSectionHeading {
+            result += try heading.renderAtCurrentCursor(generator: generator, container: container)
+        }
+        return result
     }
 
     /**

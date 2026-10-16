@@ -46,6 +46,18 @@ public class PDFGenerator: PDFGeneratorProtocol, CustomStringConvertible {
     /// Generator wide padding used for calculations of groups
     var currentPadding = EdgeInsets.zero
 
+    /// Heading redrawn at the top of each new page until the section ends.
+    var repeatingSectionHeading: PDFRepeatingSectionHeading?
+
+    /// True while that heading is measured or drawn, so it is not attached a second time.
+    var isRenderingRepeatingHeading = false
+
+    /// Absolute Y reserved for a heading that has not been drawn yet.
+    var pendingRepeatingHeadingAnchor: CGFloat?
+
+    /// Counts drawings of the active heading. Table pagination reads the delta around a page break.
+    var repeatingHeadingPlacements = 0
+
     /// Relative value tracking progress
     public let progress = Progress.discreteProgress(totalUnitCount: 3)
 
@@ -103,5 +115,9 @@ public class PDFGenerator: PDFGeneratorProtocol, CustomStringConvertible {
         textColor = textColor.mapValues { _ in
             Color.black
         }
+        repeatingSectionHeading = nil
+        isRenderingRepeatingHeading = false
+        pendingRepeatingHeadingAnchor = nil
+        repeatingHeadingPlacements = 0
     }
 }

@@ -210,6 +210,34 @@ public class PDFDocument: CustomStringConvertible {
         objects += [(container, PDFTableObject(table: table))]
     }
 
+    /**
+     * Adds a heading that stays with the following content and is repeated after a page break.
+     *
+     * The heading is drawn by the next text or table, not on its own. `gap` is the space between
+     * the heading and that content. Call ``PDFDocument/endRepeatingSectionHeading(_:)`` when the
+     * section ends, so a later page break does not repeat this heading.
+     *
+     * - Parameter container: Container where the heading is drawn
+     * - Parameter table: Heading, usually a single underlined row
+     * - Parameter gap: Space kept between the heading and the following content
+     */
+    public func addRepeatingSectionHeading(
+        _ container: PDFContainer = PDFContainer.contentLeft,
+        table: PDFTable,
+        gap: CGFloat = 0
+    ) {
+        objects += [(container, PDFRepeatingSectionHeadingObject(table: table, gap: gap))]
+    }
+
+    /**
+     * Stops repeating the heading started by ``PDFDocument/addRepeatingSectionHeading(_:table:gap:)``.
+     *
+     * - Parameter container: Unused. Accepted so the call matches the other document methods.
+     */
+    public func endRepeatingSectionHeading(_ container: PDFContainer = PDFContainer.contentLeft) {
+        objects += [(container, PDFEndRepeatingSectionHeadingObject())]
+    }
+
     // MARK: List
 
     /**

@@ -69,6 +69,7 @@ class PDFAttributedTextObject: PDFRenderObject {
      */
     override func calculate(generator: PDFGenerator, container: PDFContainer) throws -> [PDFLocatedRenderObject] {
         var result: [PDFLocatedRenderObject] = []
+        result += try generator.prepareRepeatingHeadingForText(in: container)
 
         // Generate attributed string if simple text, otherwise uses given attributedText
         attributedString = try generateAttributedText(generator: generator, container: container)
